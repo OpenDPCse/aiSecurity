@@ -1,0 +1,5 @@
+data/*
+*.png
+*.pyc
+libs/*
+.codex
