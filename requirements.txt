@@ -1,0 +1,6 @@
+pandas
+torch
+transformers
+datasets
+litellm
+accelerate
