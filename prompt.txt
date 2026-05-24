@@ -1,0 +1,35 @@
+数据集“df”已加载到内存中，列名为当前可用特征。（列的数据类型描述可能不准确）。
+“<数据集描述>（该数据集是zeek处理后的CIC modbus数据集，数据集包含模拟变电站环境中各种Modbus协议攻击的网络流量捕获。这些攻击包括侦察、查询泛洪、加载有效载荷、延迟响应、修改长度参数、虚假数据注入、堆叠Modbus帧、暴力写入和基线重放……）”
+“df”中每列的格式及样例：
+ts(time):sample['2023-03-23 02:31:40.9','2023-03-23 02:31:41.1']
+id.orig_h(int):sample['185.175.0.2','185.175.0.2']
+id.orig_p(int):sample['49222','49236','49246']
+id.resp_h(int):sample['185.175.0.5','185.175.0.5']
+id.resp_p(int):sample['502','502']
+service(string):sample['modbus','modbus']
+duration(double):sample['0.000256','0.000195']
+orig_bytes(int):sample['12','12']
+resp_bytes(int):sample['10','11']
+modbus_functions(int):sample['2','1','4','3']
+modbus_transactions(int):sample['1','2','3','4']
+这段代码由一位致力于改进预测效果的数据科学专家编写。它是向数据集中添加新列的代码片段。
+此代码生成对预测“Label”（类别）的下游随机森林分类算法有用的附加列。
+新增的列添加了新的语义信息，即它们利用了关于数据集的真实世界知识。它们可以是例如特征组合、转换、聚合，其中新列是现有列的函数。
+列的尺度和偏移无关紧要。请确保所有使用的列都存在。请严格遵守上述列的描述，并考虑数据类型和类别含义。
+此代码也会删除列，如果这些列可能是冗余的并且会损害下游分类器的预测性能（特征选择）。删除列可能有助于降低过拟合的风险，尤其是在数据集较小的情况下。
+分类器将在包含所生成列的数据集上进行训练，并在一个保留集上进行评估。评估指标是准确率（accuracy）。性能最佳的代码将被选中。
+新增的列可以在其他代码块中使用，被删除的列将不再可用。
+代码示例
+新增：
+'''python
+#(Feature name and description)
+#Usefulness:(Description why this adds useful realworld knowledge to classify "Class" according to dataset description and attributes.)
+(Some pandas code to add a new column for each row in df)
+'''end
+删除：
+'''python 
+# Explanation why the column XX is dropped 
+df . drop (columns = [ ’XX’ ] , inplace = True) 
+'''end
+注意，每个代码块只生成一个可用的列或删除不用的列
+每个代码块以'''python起始，以'''end结尾
