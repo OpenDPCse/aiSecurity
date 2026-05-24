@@ -1,0 +1,232 @@
+\section{Framework and Method}
+\label{sec:framework}
+
+We design a three-stage cross-domain trust management framework.
+The first stage aligns heterogeneous trust scores into a shared semantic
+space. The second stage detects domain-level trust-behavior drift by
+comparing public semantic trust distributions with current and historical
+behavioral observations. The third stage, which is the focus of this
+section, attributes the detected domain-level drift to individual nodes.
+The key design principle is to avoid directly thresholding QoS metrics.
+Instead, we measure the residual between a node's trust-conditioned
+behavioral expectation and its current behavior, and then quantify how much
+the node contributes to the domain-level distributional drift.
+
+\subsection{System Model and Notation}
+\label{sec:notation}
+
+Let $\mathcal{D}$ denote the set of trust domains. Each domain
+$d \in \mathcal{D}$ contains a set of nodes $\mathcal{V}_d$.
+After semantic alignment, each node $v \in \mathcal{V}_d$ has a unified
+semantic trust score $s_v \in [0,1]$. The score $s_v$ represents the
+public trust capability of node $v$ on a domain-independent semantic axis.
+
+At epoch $t$, the system collects interaction observations and aggregates
+them into node-level behavioral scores. We denote by $q_v(t) \in [0,1]$
+the current observed behavior score of node $v$, and by $h_v(t) \in [0,1]$
+its historical behavior score over a previous stable window. Let $n_v(t)$
+be the number of observations supporting $q_v(t)$.
+
+For each domain $d$, the second stage constructs three distributions:
+\begin{itemize}
+    \item $P_d(t)$: public semantic trust distribution induced by aligned
+    trust records $\{s_v\}_{v \in \mathcal{V}_d}$;
+    \item $Q_d(t)$: current behavioral distribution induced by
+    $\{q_v(t)\}_{v \in \mathcal{V}_d}$;
+    \item $H_d(t)$: historical behavioral distribution induced by
+    $\{h_v(t)\}_{v \in \mathcal{V}_d}$.
+\end{itemize}
+The domain-level drift score is
+\begin{equation}
+    \Delta_d(t) =
+    \frac{
+    \mathrm{JS}(P_d(t), Q_d(t)) +
+    \mathrm{JS}(P_d(t), H_d(t)) +
+    \mathrm{JS}(Q_d(t), H_d(t))
+    }{3},
+    \label{eq:domain-drift}
+\end{equation}
+where $\mathrm{JS}(\cdot,\cdot)$ is the Jensen-Shannon divergence.
+If $\Delta_d(t)$ exceeds a domain-level threshold, the third stage is
+activated to localize the nodes responsible for the drift.
+
+\subsection{Node-Level Trust Residual Attribution}
+\label{sec:node-attribution}
+
+\paragraph{Trust-conditioned behavioral expectation.}
+For each node $v$, we first estimate the behavior that should be expected
+from it at epoch $t$. The expectation combines three sources of evidence:
+the aligned semantic trust score, the node's own historical behavior, and
+the historical behavior of nodes in the same semantic bucket.
+
+Let $\mathcal{B}(v)$ denote the set of historical observations from nodes
+in the same domain and the same semantic score bucket as $v$. We define
+the bucket baseline as
+\begin{equation}
+    b_v(t) = \frac{1}{|\mathcal{B}(v)|}
+    \sum_{u \in \mathcal{B}(v)} h_u(t).
+    \label{eq:bucket-baseline}
+\end{equation}
+When the bucket has insufficient history, we fall back to the domain-level
+historical mean, and then to $s_v$ if no historical observation is available.
+
+The trust-conditioned expectation of node $v$ is
+\begin{equation}
+    e_v(t) =
+    \alpha s_v + \beta h_v(t) + \gamma b_v(t),
+    \quad \alpha + \beta + \gamma = 1.
+    \label{eq:expectation}
+\end{equation}
+In our implementation, we use $\alpha=0.3$, $\beta=0.5$, and $\gamma=0.2$
+by default. This weighting gives priority to the node's own historical
+behavior while still preserving the semantic trust commitment.
+
+\paragraph{Positive residual.}
+The node-level residual is the gap between expected behavior and current
+behavior:
+\begin{equation}
+    r_v(t) = e_v(t) - q_v(t).
+    \label{eq:raw-residual}
+\end{equation}
+Only positive residuals are treated as malicious evidence, because behavior
+better than expectation does not indicate trust degradation. We further
+weight the residual by observation support:
+\begin{equation}
+    R_v(t) =
+    \min\left(1, \frac{n_v(t)}{n_{\min}}\right)
+    \cdot
+    \max(0, r_v(t)).
+    \label{eq:weighted-residual}
+\end{equation}
+This prevents nodes with too few observations from dominating the
+attribution result.
+
+\paragraph{Leave-one-out drift contribution.}
+A high residual indicates that a node behaves worse than expected, but it
+does not necessarily explain the domain-level drift. Therefore, we also
+measure how much node $v$ contributes to $\Delta_d(t)$.
+Let $\Delta_d^{(-v)}(t)$ be the domain drift recomputed after removing
+node $v$ from the current behavioral distribution $Q_d(t)$. We define
+the contribution of node $v$ as
+\begin{equation}
+    C_v(t) =
+    \max\left(0, \Delta_d(t) - \Delta_d^{(-v)}(t)\right).
+    \label{eq:contribution}
+\end{equation}
+If removing $v$ reduces the drift, then $v$ is a contributor to the
+domain-level anomaly. If the drift remains unchanged, the node is not a
+major explanation for the domain alarm.
+
+\paragraph{Attribution score and residual state.}
+We combine the local residual and the leave-one-out contribution into an
+attribution score:
+\begin{equation}
+    A_v(t) =
+    \lambda R_v(t) +
+    (1-\lambda)\cdot
+    \min\left(1, \frac{C_v(t)}{\eta}\right),
+    \label{eq:attribution-score}
+\end{equation}
+where $\lambda$ controls the balance between local residual and
+distributional contribution, and $\eta$ normalizes the contribution term.
+We use $\lambda=0.7$ by default.
+
+To avoid reacting to isolated fluctuations, we maintain a one-sided CUSUM
+state:
+\begin{equation}
+    S_v(t) =
+    \max\left(0, S_v(t-1) + A_v(t) - \kappa\right),
+    \label{eq:cusum}
+\end{equation}
+where $\kappa$ is a slack term for benign variation. Node $v$ is marked
+as suspicious if $S_v(t) > \tau_{\mathrm{node}}$.
+
+\paragraph{Attack interpretation.}
+The residual trajectory provides a simple interpretation of common attacks.
+For a normal node, $S_v(t)$ remains close to zero. For a grayhole node,
+$R_v(t)$ is repeatedly positive and $S_v(t)$ gradually crosses the
+threshold. For a blackhole node, $q_v(t)$ is close to zero and
+$S_v(t)$ increases quickly. We classify a suspicious node as blackhole
+when $q_v(t) \leq \theta_{\mathrm{black}}$; otherwise it is classified
+as grayhole. Discrimination attacks can be handled by applying the same
+residual computation separately for each source domain and comparing the
+resulting group states, although the minimum core design only requires
+the aggregate residual attribution above.
+
+\begin{algorithm}[t]
+\caption{Node-Level Residual Attribution}
+\label{alg:node-attribution}
+\begin{algorithmic}[1]
+\Require Domain $d$, semantic scores $\{s_v\}$, current observations
+$\{q_v(t), n_v(t)\}$, historical observations $\{h_v(t)\}$,
+domain drift $\Delta_d(t)$
+\Ensure Ranked node attribution results
+\ForAll{$v \in \mathcal{V}_d$}
+    \State Compute semantic-bucket baseline $b_v(t)$
+    \State $e_v(t) \gets \alpha s_v + \beta h_v(t) + \gamma b_v(t)$
+    \State $R_v(t) \gets \min(1,n_v(t)/n_{\min})\cdot
+    \max(0,e_v(t)-q_v(t))$
+    \State Recompute $\Delta_d^{(-v)}(t)$ by removing $v$ from $Q_d(t)$
+    \State $C_v(t) \gets \max(0,\Delta_d(t)-\Delta_d^{(-v)}(t))$
+    \State $A_v(t) \gets \lambda R_v(t) +
+    (1-\lambda)\min(1,C_v(t)/\eta)$
+    \State $S_v(t) \gets \max(0,S_v(t-1)+A_v(t)-\kappa)$
+    \If{$S_v(t) > \tau_{\mathrm{node}}$}
+        \If{$q_v(t) \leq \theta_{\mathrm{black}}$}
+            \State $\mathrm{label}(v) \gets \textsc{Blackhole}$
+        \Else
+            \State $\mathrm{label}(v) \gets \textsc{Grayhole}$
+        \EndIf
+    \Else
+        \State $\mathrm{label}(v) \gets \textsc{Normal}$
+    \EndIf
+\EndFor
+\State \Return nodes ranked by $S_v(t)$ and $A_v(t)$
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Optional Randomized Confirmation}
+\label{sec:randomized-confirmation}
+
+The residual attribution stage is sufficient for the minimum design.
+However, when the attribution score falls into an ambiguous region, the
+system can run a lightweight randomized confirmation procedure. The goal
+is not to create artificial QoS stress, but to separate node-specific
+misbehavior from shared environmental fluctuation.
+
+The verifier selects a suspicious node $v$ and a small set of control
+nodes $\mathcal{U}_v$ from the same domain and semantic bucket. It then
+uses a secret key $K$ to generate hidden bits
+\begin{equation}
+    z_i = \mathrm{PRF}(K, v, i) \bmod 2.
+\end{equation}
+If $z_i=0$, a normal-looking request is sent to $v$; if $z_i=1$, the same
+request distribution is used for a randomly selected control node
+$u \in \mathcal{U}_v$. The target nodes only observe ordinary traffic.
+The hidden bits are used only by the verifier to assign requests to
+treatment and control groups. A differential residual CUSUM can then be
+used:
+\begin{equation}
+    Z_v(i) =
+    \max\left(0, Z_v(i-1) +
+    \left(y_u(i)-y_v(i)\right) - \kappa_a\right),
+\end{equation}
+where $y_v(i)$ and $y_u(i)$ are the observed compliance scores for the
+suspicious and control nodes. If $Z_v(i)>\tau_a$, the node-specific
+misbehavior is confirmed. This step is optional and is only invoked for
+ambiguous cases; the main detection pipeline remains passive and
+lightweight.
+
+\subsection{Discussion}
+\label{sec:discussion}
+
+The proposed node-level attribution is different from direct QoS anomaly
+detection. A node is not flagged merely because its current QoS is low.
+Instead, the system asks whether the current behavior is lower than what
+is expected from the node's aligned semantic trust, own history, and peer
+bucket baseline, and whether the node explains the domain-level
+distributional drift. This makes the third stage a natural continuation
+of the first two stages: semantic alignment defines comparable trust
+capability, domain-level distributional detection raises an alarm, and
+node-level residual attribution localizes the entities responsible for the
+alarm.
